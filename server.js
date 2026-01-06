@@ -16,7 +16,9 @@ const gameState = {
     y: 7,
     hp: 100,
     maxHp: 100,
-    color: '#ff0000'
+    color: '#ff0000',
+    lastMove: 0,
+    lastAttack: 0
   }
 };
 
@@ -37,7 +39,8 @@ io.on('connection', (socket) => {
     hp: 50,
     maxHp: 50,
     color: playerColor,
-    lastAttack: 0
+    lastAttack: 0,
+    isDead: false
   };
 
   // Send initial game state to new player
@@ -52,7 +55,7 @@ io.on('connection', (socket) => {
   // Handle player movement
   socket.on('move', (direction) => {
     const player = gameState.players[socket.id];
-    if (!player) return;
+    if (!player || player.isDead) return;
 
     const oldX = player.x;
     const oldY = player.y;
@@ -88,7 +91,7 @@ io.on('connection', (socket) => {
   // Handle attack
   socket.on('attack', () => {
     const player = gameState.players[socket.id];
-    if (!player) return;
+    if (!player || player.isDead) return;
 
     const now = Date.now();
     if (now - player.lastAttack < 1000) return; // 1 second cooldown
@@ -122,6 +125,24 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Handle respawn
+  socket.on('respawn', () => {
+    const player = gameState.players[socket.id];
+    if (!player) return;
+
+    player.isDead = false;
+    player.hp = player.maxHp;
+    player.x = Math.floor(Math.random() * 5) + 2;
+    player.y = Math.floor(Math.random() * 5) + 2;
+
+    io.emit('playerRespawned', {
+      id: socket.id,
+      x: player.x,
+      y: player.y,
+      hp: player.hp
+    });
+  });
+
   // Handle disconnect
   socket.on('disconnect', () => {
     console.log('Player disconnected:', socket.id);
@@ -129,6 +150,99 @@ io.on('connection', (socket) => {
     io.emit('playerLeft', socket.id);
   });
 });
+
+// Enemy AI Loop
+setInterval(() => {
+  const now = Date.now();
+
+  // Enemy movement (every 500ms)
+  if (now - gameState.enemy.lastMove > 500 && gameState.enemy.hp > 0) {
+    gameState.enemy.lastMove = now;
+
+    // Find nearest alive player
+    let nearestPlayer = null;
+    let minDist = Infinity;
+
+    for (let id in gameState.players) {
+      const player = gameState.players[id];
+      if (player.isDead) continue;
+
+      const dist = Math.abs(player.x - gameState.enemy.x) + Math.abs(player.y - gameState.enemy.y);
+      if (dist < minDist) {
+        minDist = dist;
+        nearestPlayer = player;
+      }
+    }
+
+    // Move toward nearest player (dumb pathfinding)
+    if (nearestPlayer) {
+      const dx = nearestPlayer.x - gameState.enemy.x;
+      const dy = nearestPlayer.y - gameState.enemy.y;
+
+      // Check if already adjacent (attack range)
+      const isAdjacent = (Math.abs(dx) === 1 && dy === 0) || (dx === 0 && Math.abs(dy) === 1);
+
+      if (!isAdjacent) {
+        // Not adjacent yet, move closer
+        // Randomly choose to move horizontally or vertically (makes it less predictable)
+        if (Math.random() > 0.5) {
+          // Try horizontal movement first
+          if (Math.abs(dx) > 1) {
+            if (dx > 0) gameState.enemy.x++;
+            else if (dx < 0) gameState.enemy.x--;
+          } else if (Math.abs(dy) > 0) {
+            if (dy > 0) gameState.enemy.y++;
+            else if (dy < 0) gameState.enemy.y--;
+          }
+        } else {
+          // Try vertical movement first
+          if (Math.abs(dy) > 1) {
+            if (dy > 0) gameState.enemy.y++;
+            else if (dy < 0) gameState.enemy.y--;
+          } else if (Math.abs(dx) > 0) {
+            if (dx > 0) gameState.enemy.x++;
+            else if (dx < 0) gameState.enemy.x--;
+          }
+        }
+
+        io.emit('enemyMoved', {
+          x: gameState.enemy.x,
+          y: gameState.enemy.y
+        });
+      }
+      // If already adjacent, don't move - just stay in attack range
+    }
+  }
+
+  // Enemy attack (every 1 second)
+  if (now - gameState.enemy.lastAttack > 1000 && gameState.enemy.hp > 0) {
+    gameState.enemy.lastAttack = now;
+
+    // Attack all adjacent players
+    for (let id in gameState.players) {
+      const player = gameState.players[id];
+      if (player.isDead) continue;
+
+      const dx = Math.abs(player.x - gameState.enemy.x);
+      const dy = Math.abs(player.y - gameState.enemy.y);
+
+      if ((dx === 1 && dy === 0) || (dx === 0 && dy === 1)) {
+        player.hp = Math.max(0, player.hp - 10);
+
+        io.emit('playerHit', {
+          id: id,
+          hp: player.hp,
+          damage: 10
+        });
+
+        if (player.hp <= 0) {
+          player.isDead = true;
+          io.emit('playerDied', id);
+        }
+      }
+    }
+  }
+}, 100); // Check every 100ms for smooth gameplay
 
 const PORT = process.env.PORT || 3000;
 http.listen(PORT, () => {

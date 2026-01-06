@@ -14,6 +14,7 @@ let gameState = {
   players: {},
   enemy: null
 };
+let isDead = false;
 
 // Socket event handlers
 socket.on('init', (data) => {
@@ -65,6 +66,58 @@ socket.on('enemyRespawned', (enemy) => {
   render();
 });
 
+socket.on('enemyMoved', (data) => {
+  if (gameState.enemy) {
+    gameState.enemy.x = data.x;
+    gameState.enemy.y = data.y;
+    render();
+  }
+});
+
+socket.on('playerHit', (data) => {
+  if (gameState.players[data.id]) {
+    gameState.players[data.id].hp = data.hp;
+    if (data.id === myPlayerId) {
+      updatePlayerInfo();
+      addMessage(`You took ${data.damage} damage!`);
+    }
+    render();
+  }
+});
+
+socket.on('playerDied', (playerId) => {
+  if (gameState.players[playerId]) {
+    gameState.players[playerId].isDead = true;
+    if (playerId === myPlayerId) {
+      isDead = true;
+      addMessage('💀 You died! Click Respawn to continue fighting.');
+      showRespawnButton();
+    } else {
+      addMessage('A player has fallen!');
+    }
+    render();
+  }
+});
+
+socket.on('playerRespawned', (data) => {
+  if (gameState.players[data.id]) {
+    gameState.players[data.id].x = data.x;
+    gameState.players[data.id].y = data.y;
+    gameState.players[data.id].hp = data.hp;
+    gameState.players[data.id].isDead = false;
+
+    if (data.id === myPlayerId) {
+      isDead = false;
+      hideRespawnButton();
+      addMessage('You have respawned!');
+      updatePlayerInfo();
+    } else {
+      addMessage('A player has respawned!');
+    }
+    render();
+  }
+});
+
 // Keyboard controls
 const keys = {};
 document.addEventListener('keydown', (e) => {
@@ -77,7 +130,7 @@ document.addEventListener('keyup', (e) => {
 });
 
 function handleInput(key) {
-  if (!myPlayerId) return;
+  if (!myPlayerId || isDead) return;
 
   const moveKeys = {
     'w': 'up', 'W': 'up', 'ArrowUp': 'up',
@@ -99,8 +152,14 @@ function render() {
   ctx.fillStyle = '#1a1a1a';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+  // Apply death overlay if player is dead
+  if (isDead) {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+
   // Draw grid
-  ctx.strokeStyle = '#333';
+  ctx.strokeStyle = isDead ? '#222' : '#333';
   ctx.lineWidth = 1;
   for (let x = 0; x <= GAME_WIDTH; x++) {
     ctx.beginPath();
@@ -131,6 +190,8 @@ function render() {
   // Draw players
   for (let id in gameState.players) {
     const player = gameState.players[id];
+    if (player.isDead) continue; // Don't draw dead players
+
     const isMe = id === myPlayerId;
     drawPixelSprite(player.x, player.y, player.color, isMe ? 'Y' : 'P');
     drawHealthBar(player.x, player.y, player.hp, player.maxHp);
@@ -213,6 +274,28 @@ function addMessage(text) {
   // Keep only last 5 messages
   while (messagesDiv.children.length > 5) {
     messagesDiv.removeChild(messagesDiv.firstChild);
+  }
+}
+
+function showRespawnButton() {
+  let btn = document.getElementById('respawnBtn');
+  if (!btn) {
+    btn = document.createElement('button');
+    btn.id = 'respawnBtn';
+    btn.className = 'respawn-btn';
+    btn.textContent = 'RESPAWN';
+    btn.onclick = () => {
+      socket.emit('respawn');
+    };
+    document.querySelector('.container').appendChild(btn);
+  }
+  btn.style.display = 'block';
+}
+
+function hideRespawnButton() {
+  const btn = document.getElementById('respawnBtn');
+  if (btn) {
+    btn.style.display = 'none';
   }
 }
 
