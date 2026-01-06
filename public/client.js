@@ -19,6 +19,8 @@ let gameState = {
 let isDead = false;
 let mouseX = 0;
 let mouseY = 0;
+let homingCooldown = 0;
+let homingCooldownInterval = null;
 
 // Track mouse position
 canvas.addEventListener('mousemove', (e) => {
@@ -325,6 +327,13 @@ socket.on('abilityUsed', (data) => {
       playSound('attack');
       addMessage(`${playerColor} dashed away! 💨`);
       break;
+    case 'homing':
+      playSound('victory');
+      addMessage(`${playerColor} launched a Homing Missile! 🚀`);
+      if (data.playerId === myPlayerId) {
+        startHomingCooldown();
+      }
+      break;
   }
   render();
 });
@@ -348,6 +357,8 @@ socket.on('projectileUpdated', (data) => {
   if (proj) {
     proj.x = data.x;
     proj.y = data.y;
+    if (data.vx !== undefined) proj.vx = data.vx;
+    if (data.vy !== undefined) proj.vy = data.vy;
   }
 });
 
@@ -361,7 +372,12 @@ socket.on('projectileDestroyed', (data) => {
     playSound('enemyHit');
     gameState.enemy.hp = data.hitData.enemyHp;
     updateEnemyInfo();
-    addMessage(`Fireball hit for ${data.hitData.damage} damage! 🔥`);
+
+    if (data.hitData.projectileType === 'homing') {
+      addMessage(`💥 Homing Missile hit for ${data.hitData.damage} damage!`);
+    } else {
+      addMessage(`Fireball hit for ${data.hitData.damage} damage! 🔥`);
+    }
   }
 });
 
@@ -400,6 +416,10 @@ function handleInput(key) {
     socket.emit('ability', { type: 'heal' });
   } else if (key === 'r' || key === 'R') {
     socket.emit('ability', { type: 'dash' });
+  } else if (key === 'f' || key === 'F') {
+    if (homingCooldown <= 0) {
+      socket.emit('ability', { type: 'homing' });
+    }
   }
 }
 
@@ -571,6 +591,50 @@ function drawProjectile(proj) {
     ctx.fill();
 
     ctx.restore();
+  } else if (proj.type === 'homing') {
+    // Draw homing missile with trail and glow
+    ctx.save();
+
+    // Calculate angle based on velocity
+    const angle = Math.atan2(proj.vy, proj.vx);
+
+    // Outer glow
+    const gradient = ctx.createRadialGradient(proj.x, proj.y, 2, proj.x, proj.y, 12);
+    gradient.addColorStop(0, 'rgba(0, 255, 255, 0.8)');
+    gradient.addColorStop(0.5, 'rgba(0, 200, 255, 0.4)');
+    gradient.addColorStop(1, 'rgba(0, 150, 255, 0)');
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(proj.x, proj.y, 12, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Missile body
+    ctx.translate(proj.x, proj.y);
+    ctx.rotate(angle);
+
+    // Main body
+    ctx.fillStyle = '#00ffff';
+    ctx.fillRect(-8, -3, 16, 6);
+
+    // Nose cone
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(8, 0);
+    ctx.lineTo(12, -3);
+    ctx.lineTo(12, 3);
+    ctx.closePath();
+    ctx.fill();
+
+    // Fins
+    ctx.fillStyle = '#0088ff';
+    ctx.fillRect(-8, -5, 4, 2);
+    ctx.fillRect(-8, 3, 4, 2);
+
+    // Exhaust
+    ctx.fillStyle = '#ffaa00';
+    ctx.fillRect(-10, -2, 2, 4);
+
+    ctx.restore();
   }
 }
 
@@ -706,6 +770,38 @@ function updateActionBar() {
   } else {
     dashSlot.classList.remove('insufficient-mana');
   }
+
+  // Update homing
+  const homingSlot = document.getElementById('ability-homing');
+  if (player.mana < 60 || homingCooldown > 0) {
+    homingSlot.classList.add('insufficient-mana');
+  } else {
+    homingSlot.classList.remove('insufficient-mana');
+  }
+}
+
+function startHomingCooldown() {
+  homingCooldown = 3; // 3 seconds
+  const overlay = document.getElementById('homing-cooldown');
+  overlay.style.height = '100%';
+  overlay.textContent = homingCooldown;
+
+  if (homingCooldownInterval) clearInterval(homingCooldownInterval);
+
+  homingCooldownInterval = setInterval(() => {
+    homingCooldown -= 0.1;
+    if (homingCooldown <= 0) {
+      homingCooldown = 0;
+      overlay.style.height = '0%';
+      overlay.textContent = '';
+      clearInterval(homingCooldownInterval);
+      updateActionBar();
+    } else {
+      const percent = (homingCooldown / 3) * 100;
+      overlay.style.height = percent + '%';
+      overlay.textContent = Math.ceil(homingCooldown);
+    }
+  }, 100);
 }
 
 // Game loop

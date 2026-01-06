@@ -128,6 +128,7 @@ io.on('connection', (socket) => {
     color: playerColor,
     lastAttack: 0,
     lastAbility: 0,
+    lastUltimate: 0,
     isDead: false
   };
 
@@ -355,6 +356,48 @@ io.on('connection', (socket) => {
           });
         }
         break;
+
+      case 'homing': // F - Homing Missile (60 mana, 3 second cooldown)
+        const now2 = Date.now();
+        if (player.mana >= 60 && now2 - player.lastUltimate >= 3000) {
+          player.mana -= 60;
+          player.lastUltimate = now2;
+
+          // Create homing missile projectile
+          const missile = {
+            id: projectileIdCounter++,
+            x: player.x * GRID_SIZE + GRID_SIZE / 2,
+            y: player.y * GRID_SIZE + GRID_SIZE / 2,
+            targetX: gameState.enemy.x * GRID_SIZE + GRID_SIZE / 2,
+            targetY: gameState.enemy.y * GRID_SIZE + GRID_SIZE / 2,
+            playerId: socket.id,
+            speed: 5, // Slower than fireball
+            damage: Math.floor(Math.random() * 20) + 30, // 30-50 damage
+            type: 'homing',
+            lifetime: 0,
+            maxLifetime: 10000 // 10 seconds max
+          };
+
+          // Initial direction toward enemy
+          const dx = missile.targetX - missile.x;
+          const dy = missile.targetY - missile.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+          missile.vx = (dx / distance) * missile.speed;
+          missile.vy = (dy / distance) * missile.speed;
+
+          gameState.projectiles.push(missile);
+
+          io.emit('projectileCreated', missile);
+          io.emit('abilityUsed', {
+            playerId: socket.id,
+            ability: 'homing'
+          });
+          io.emit('playerManaChanged', {
+            id: socket.id,
+            mana: player.mana
+          });
+        }
+        break;
     }
   });
 
@@ -369,9 +412,41 @@ io.on('connection', (socket) => {
 // Projectile update loop
 setInterval(() => {
   const projectilesToRemove = [];
+  const deltaTime = 1000 / 60;
 
   for (let i = 0; i < gameState.projectiles.length; i++) {
     const proj = gameState.projectiles[i];
+
+    // Handle homing missile behavior
+    if (proj.type === 'homing' && gameState.enemy.hp > 0) {
+      proj.lifetime += deltaTime;
+
+      // Update target to current enemy position
+      const targetX = gameState.enemy.x * GRID_SIZE + GRID_SIZE / 2;
+      const targetY = gameState.enemy.y * GRID_SIZE + GRID_SIZE / 2;
+
+      // Calculate direction to target
+      const dx = targetX - proj.x;
+      const dy = targetY - proj.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+
+      if (distance > 0) {
+        // Smoothly adjust velocity toward target
+        const targetVx = (dx / distance) * proj.speed;
+        const targetVy = (dy / distance) * proj.speed;
+
+        // Lerp for smooth turning (0.15 = turning speed)
+        proj.vx += (targetVx - proj.vx) * 0.15;
+        proj.vy += (targetVy - proj.vy) * 0.15;
+      }
+
+      // Check lifetime
+      if (proj.lifetime >= proj.maxLifetime) {
+        projectilesToRemove.push(i);
+        io.emit('projectileDestroyed', { id: proj.id, hitData: null });
+        continue;
+      }
+    }
 
     // Update position
     proj.x += proj.vx;
@@ -388,8 +463,8 @@ setInterval(() => {
       shouldRemove = true;
     }
 
-    // Check wall collision
-    if (!shouldRemove && isObstacle(gridX, gridY)) {
+    // Check wall collision (homing missiles ignore walls)
+    if (!shouldRemove && proj.type !== 'homing' && isObstacle(gridX, gridY)) {
       shouldRemove = true;
     }
 
@@ -402,13 +477,16 @@ setInterval(() => {
         Math.pow(proj.y - enemyCenterY, 2)
       );
 
-      if (dist < GRID_SIZE / 2) {
+      const hitRadius = proj.type === 'homing' ? GRID_SIZE / 1.5 : GRID_SIZE / 2;
+
+      if (dist < hitRadius) {
         gameState.enemy.hp = Math.max(0, gameState.enemy.hp - proj.damage);
         shouldRemove = true;
         hitData = {
           type: 'enemy',
           damage: proj.damage,
-          enemyHp: gameState.enemy.hp
+          enemyHp: gameState.enemy.hp,
+          projectileType: proj.type
         };
 
         if (gameState.enemy.hp <= 0) {
@@ -433,7 +511,9 @@ setInterval(() => {
       io.emit('projectileUpdated', {
         id: proj.id,
         x: proj.x,
-        y: proj.y
+        y: proj.y,
+        vx: proj.vx,
+        vy: proj.vy
       });
     }
   }
