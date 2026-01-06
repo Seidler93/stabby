@@ -273,6 +273,7 @@ socket.on('playerRespawned', (data) => {
     gameState.players[data.id].x = data.x;
     gameState.players[data.id].y = data.y;
     gameState.players[data.id].hp = data.hp;
+    gameState.players[data.id].mana = data.mana;
     gameState.players[data.id].isDead = false;
 
     if (data.id === myPlayerId) {
@@ -283,6 +284,56 @@ socket.on('playerRespawned', (data) => {
       updatePlayerInfo();
     } else {
       addMessage('A player has respawned!');
+    }
+    render();
+  }
+});
+
+socket.on('playerManaChanged', (data) => {
+  if (gameState.players[data.id]) {
+    gameState.players[data.id].mana = data.mana;
+    if (data.id === myPlayerId) {
+      updatePlayerInfo();
+    }
+    render();
+  }
+});
+
+socket.on('abilityUsed', (data) => {
+  const player = gameState.players[data.playerId];
+  if (!player) return;
+
+  const playerColor = getPlayerColor(player.color);
+
+  switch (data.ability) {
+    case 'fireball':
+      playSound('attack');
+      if (data.hit) {
+        playSound('enemyHit');
+        gameState.enemy.hp = data.enemyHp;
+        updateEnemyInfo();
+        addMessage(`${playerColor} cast Fireball for ${data.damage} damage! 🔥`);
+      } else {
+        addMessage(`${playerColor}'s Fireball missed!`);
+      }
+      break;
+    case 'heal':
+      playSound('respawn');
+      addMessage(`${playerColor} healed for ${data.healAmount} HP! ✨`);
+      break;
+    case 'dash':
+      playSound('attack');
+      addMessage(`${playerColor} dashed away! 💨`);
+      break;
+  }
+  render();
+});
+
+socket.on('playerHealed', (data) => {
+  if (gameState.players[data.id]) {
+    gameState.players[data.id].hp = data.hp;
+    if (data.id === myPlayerId) {
+      updatePlayerInfo();
     }
     render();
   }
@@ -313,6 +364,12 @@ function handleInput(key) {
     socket.emit('move', moveKeys[key]);
   } else if (key === ' ' || key === 'Spacebar') {
     socket.emit('attack');
+  } else if (key === 'q' || key === 'Q') {
+    socket.emit('ability', 'fireball');
+  } else if (key === 'e' || key === 'E') {
+    socket.emit('ability', 'heal');
+  } else if (key === 'r' || key === 'R') {
+    socket.emit('ability', 'dash');
   }
 }
 
@@ -389,6 +446,7 @@ function render() {
     const isMe = id === myPlayerId;
     drawPixelSprite(player.x, player.y, player.color, isMe ? 'Y' : 'P');
     drawHealthBar(player.x, player.y, player.hp, player.maxHp);
+    drawManaBar(player.x, player.y, player.mana, player.maxMana);
   }
 }
 
@@ -418,9 +476,9 @@ function drawHealthBar(gridX, gridY, hp, maxHp) {
   const x = gridX * GRID_SIZE;
   const y = gridY * GRID_SIZE;
   const barWidth = GRID_SIZE - 8;
-  const barHeight = 4;
+  const barHeight = 3;
   const barX = x + 4;
-  const barY = y + GRID_SIZE - 6;
+  const barY = y + GRID_SIZE - 10;
 
   // Background
   ctx.fillStyle = '#333';
@@ -432,11 +490,29 @@ function drawHealthBar(gridX, gridY, hp, maxHp) {
   ctx.fillRect(barX, barY, barWidth * hpPercent, barHeight);
 }
 
+function drawManaBar(gridX, gridY, mana, maxMana) {
+  const x = gridX * GRID_SIZE;
+  const y = gridY * GRID_SIZE;
+  const barWidth = GRID_SIZE - 8;
+  const barHeight = 3;
+  const barX = x + 4;
+  const barY = y + GRID_SIZE - 6;
+
+  // Background
+  ctx.fillStyle = '#333';
+  ctx.fillRect(barX, barY, barWidth, barHeight);
+
+  // Mana
+  const manaPercent = mana / maxMana;
+  ctx.fillStyle = '#00bfff';
+  ctx.fillRect(barX, barY, barWidth * manaPercent, barHeight);
+}
+
 function updatePlayerInfo() {
   const player = gameState.players[myPlayerId];
   if (player) {
     document.getElementById('playerInfo').textContent =
-      `You: ${getPlayerColor(player.color)} | HP: ${player.hp}/${player.maxHp}`;
+      `You: ${getPlayerColor(player.color)} | HP: ${player.hp}/${player.maxHp} | Mana: ${player.mana}/${player.maxMana}`;
   }
 }
 

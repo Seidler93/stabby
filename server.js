@@ -120,8 +120,11 @@ io.on('connection', (socket) => {
     y: Math.floor(Math.random() * 5) + 2,
     hp: 50,
     maxHp: 50,
+    mana: 100,
+    maxMana: 100,
     color: playerColor,
     lastAttack: 0,
+    lastAbility: 0,
     isDead: false
   };
 
@@ -220,6 +223,7 @@ io.on('connection', (socket) => {
 
     player.isDead = false;
     player.hp = player.maxHp;
+    player.mana = player.maxMana;
     player.x = Math.floor(Math.random() * 5) + 2;
     player.y = Math.floor(Math.random() * 5) + 2;
 
@@ -227,8 +231,138 @@ io.on('connection', (socket) => {
       id: socket.id,
       x: player.x,
       y: player.y,
-      hp: player.hp
+      hp: player.hp,
+      mana: player.mana
     });
+  });
+
+  // Handle abilities
+  socket.on('ability', (abilityType) => {
+    const player = gameState.players[socket.id];
+    if (!player || player.isDead) return;
+
+    const now = Date.now();
+    if (now - player.lastAbility < 500) return; // 0.5 second cooldown between abilities
+
+    player.lastAbility = now;
+
+    switch (abilityType) {
+      case 'fireball': // Q - Ranged attack (30 mana)
+        if (player.mana >= 30) {
+          player.mana -= 30;
+
+          // Check if enemy is within 3 tiles in a straight line
+          const dx = gameState.enemy.x - player.x;
+          const dy = gameState.enemy.y - player.y;
+          const inRange = (Math.abs(dx) <= 3 && dy === 0) || (dx === 0 && Math.abs(dy) <= 3);
+
+          if (inRange) {
+            const damage = Math.floor(Math.random() * 15) + 15; // 15-30 damage
+            gameState.enemy.hp = Math.max(0, gameState.enemy.hp - damage);
+
+            io.emit('abilityUsed', {
+              playerId: socket.id,
+              ability: 'fireball',
+              hit: true,
+              damage: damage,
+              enemyHp: gameState.enemy.hp
+            });
+
+            if (gameState.enemy.hp <= 0) {
+              io.emit('enemyDefeated');
+              setTimeout(() => {
+                gameState.enemy.hp = gameState.enemy.maxHp;
+                gameState.enemy.x = 10;
+                gameState.enemy.y = 4;
+                io.emit('enemyRespawned', gameState.enemy);
+              }, 5000);
+            }
+          } else {
+            io.emit('abilityUsed', {
+              playerId: socket.id,
+              ability: 'fireball',
+              hit: false
+            });
+          }
+
+          io.emit('playerManaChanged', {
+            id: socket.id,
+            mana: player.mana
+          });
+        }
+        break;
+
+      case 'heal': // E - Heal self (40 mana)
+        if (player.mana >= 40) {
+          player.mana -= 40;
+          const healAmount = 20;
+          player.hp = Math.min(player.maxHp, player.hp + healAmount);
+
+          io.emit('abilityUsed', {
+            playerId: socket.id,
+            ability: 'heal',
+            healAmount: healAmount
+          });
+
+          io.emit('playerHealed', {
+            id: socket.id,
+            hp: player.hp
+          });
+
+          io.emit('playerManaChanged', {
+            id: socket.id,
+            mana: player.mana
+          });
+        }
+        break;
+
+      case 'dash': // R - Dash 2 tiles (25 mana)
+        if (player.mana >= 25) {
+          player.mana -= 25;
+
+          // Dash in the direction of nearest player or away from enemy
+          const enemyDx = gameState.enemy.x - player.x;
+          const enemyDy = gameState.enemy.y - player.y;
+
+          // Dash away from enemy
+          let dashX = player.x;
+          let dashY = player.y;
+
+          if (Math.abs(enemyDx) > Math.abs(enemyDy)) {
+            dashX = enemyDx > 0 ? player.x - 2 : player.x + 2;
+          } else {
+            dashY = enemyDy > 0 ? player.y - 2 : player.y + 2;
+          }
+
+          // Clamp to bounds
+          dashX = Math.max(0, Math.min(GAME_WIDTH - 1, dashX));
+          dashY = Math.max(0, Math.min(GAME_HEIGHT - 1, dashY));
+
+          // Check if dash location is valid (not obstacle or enemy)
+          if (!isObstacle(dashX, dashY) &&
+            !(dashX === gameState.enemy.x && dashY === gameState.enemy.y)) {
+            player.x = dashX;
+            player.y = dashY;
+          }
+
+          io.emit('abilityUsed', {
+            playerId: socket.id,
+            ability: 'dash'
+          });
+
+          io.emit('playerMoved', {
+            id: socket.id,
+            x: player.x,
+            y: player.y
+          });
+
+          io.emit('playerManaChanged', {
+            id: socket.id,
+            mana: player.mana
+          });
+        }
+        break;
+    }
   });
 
   // Handle disconnect
@@ -238,6 +372,20 @@ io.on('connection', (socket) => {
     io.emit('playerLeft', socket.id);
   });
 });
+
+// Mana regeneration loop (5 mana per second)
+setInterval(() => {
+  for (let id in gameState.players) {
+    const player = gameState.players[id];
+    if (!player.isDead && player.mana < player.maxMana) {
+      player.mana = Math.min(player.maxMana, player.mana + 5);
+      io.emit('playerManaChanged', {
+        id: id,
+        mana: player.mana
+      });
+    }
+  }
+}, 1000);
 
 // Enemy AI Loop
 setInterval(() => {
