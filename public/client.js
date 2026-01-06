@@ -21,6 +21,7 @@ let mouseX = 0;
 let mouseY = 0;
 let homingCooldown = 0;
 let homingCooldownInterval = null;
+let aoeEffects = []; // Store AOE visual effects
 
 // Track mouse position
 canvas.addEventListener('mousemove', (e) => {
@@ -334,6 +335,29 @@ socket.on('abilityUsed', (data) => {
         startHomingCooldown();
       }
       break;
+    case 'groundsmash':
+      playSound('enemyHit');
+
+      // Add AOE visual effect
+      aoeEffects.push({
+        x: data.position.x,
+        y: data.position.y,
+        radius: 0,
+        maxRadius: GRID_SIZE * 1.8,
+        alpha: 1,
+        duration: 500,
+        startTime: Date.now()
+      });
+
+      if (data.hit) {
+        playSound('enemyHit');
+        gameState.enemy.hp = data.enemyHp;
+        updateEnemyInfo();
+        addMessage(`${playerColor} ground smashed for ${data.damage} damage! 💥`);
+      } else {
+        addMessage(`${playerColor} ground smashed but missed!`);
+      }
+      break;
   }
   render();
 });
@@ -416,6 +440,8 @@ function handleInput(key) {
     socket.emit('ability', { type: 'heal' });
   } else if (key === 'r' || key === 'R') {
     socket.emit('ability', { type: 'dash' });
+  } else if (key === 'v' || key === 'V') {
+    socket.emit('ability', { type: 'groundsmash' });
   } else if (key === 'f' || key === 'F') {
     if (homingCooldown <= 0) {
       socket.emit('ability', { type: 'homing' });
@@ -502,6 +528,24 @@ function render() {
   // Draw projectiles
   for (let proj of gameState.projectiles) {
     drawProjectile(proj);
+  }
+
+  // Draw AOE effects
+  const now = Date.now();
+  for (let i = aoeEffects.length - 1; i >= 0; i--) {
+    const effect = aoeEffects[i];
+    const elapsed = now - effect.startTime;
+
+    if (elapsed >= effect.duration) {
+      aoeEffects.splice(i, 1);
+      continue;
+    }
+
+    const progress = elapsed / effect.duration;
+    effect.radius = effect.maxRadius * progress;
+    effect.alpha = 1 - progress;
+
+    drawAOEEffect(effect);
   }
 }
 
@@ -636,6 +680,59 @@ function drawProjectile(proj) {
 
     ctx.restore();
   }
+}
+
+function drawAOEEffect(effect) {
+  ctx.save();
+
+  const centerX = effect.x * GRID_SIZE + GRID_SIZE / 2;
+  const centerY = effect.y * GRID_SIZE + GRID_SIZE / 2;
+
+  // Outer ring
+  ctx.strokeStyle = `rgba(255, 100, 0, ${effect.alpha * 0.8})`;
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, effect.radius, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Inner ring
+  ctx.strokeStyle = `rgba(255, 150, 0, ${effect.alpha})`;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, effect.radius * 0.7, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Shockwave fill
+  const gradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, effect.radius);
+  gradient.addColorStop(0, `rgba(255, 200, 0, ${effect.alpha * 0.3})`);
+  gradient.addColorStop(0.5, `rgba(255, 100, 0, ${effect.alpha * 0.2})`);
+  gradient.addColorStop(1, `rgba(255, 0, 0, 0)`);
+  ctx.fillStyle = gradient;
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, effect.radius, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Impact cracks (8 directions)
+  ctx.strokeStyle = `rgba(255, 80, 0, ${effect.alpha * 0.6})`;
+  ctx.lineWidth = 3;
+  for (let i = 0; i < 8; i++) {
+    const angle = (Math.PI * 2 / 8) * i;
+    const startDist = GRID_SIZE * 0.3;
+    const endDist = effect.radius;
+
+    ctx.beginPath();
+    ctx.moveTo(
+      centerX + Math.cos(angle) * startDist,
+      centerY + Math.sin(angle) * startDist
+    );
+    ctx.lineTo(
+      centerX + Math.cos(angle) * endDist,
+      centerY + Math.sin(angle) * endDist
+    );
+    ctx.stroke();
+  }
+
+  ctx.restore();
 }
 
 function updatePlayerInfo() {
@@ -777,6 +874,14 @@ function updateActionBar() {
     homingSlot.classList.add('insufficient-mana');
   } else {
     homingSlot.classList.remove('insufficient-mana');
+  }
+
+  // Update ground smash
+  const smashSlot = document.getElementById('ability-groundsmash');
+  if (player.mana < 50) {
+    smashSlot.classList.add('insufficient-mana');
+  } else {
+    smashSlot.classList.remove('insufficient-mana');
   }
 }
 

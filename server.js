@@ -398,6 +398,60 @@ io.on('connection', (socket) => {
           });
         }
         break;
+
+      case 'groundsmash': // V - Ground Smash (50 mana)
+        if (player.mana >= 50) {
+          player.mana -= 50;
+
+          const damage = Math.floor(Math.random() * 15) + 20; // 20-35 damage
+          let hitEnemy = false;
+
+          // Check all 8 surrounding tiles (including diagonals)
+          const surroundingTiles = [
+            { x: player.x - 1, y: player.y - 1 }, // Top-left
+            { x: player.x, y: player.y - 1 },     // Top
+            { x: player.x + 1, y: player.y - 1 }, // Top-right
+            { x: player.x - 1, y: player.y },     // Left
+            { x: player.x + 1, y: player.y },     // Right
+            { x: player.x - 1, y: player.y + 1 }, // Bottom-left
+            { x: player.x, y: player.y + 1 },     // Bottom
+            { x: player.x + 1, y: player.y + 1 }  // Bottom-right
+          ];
+
+          // Check if enemy is in any surrounding tile
+          for (const tile of surroundingTiles) {
+            if (gameState.enemy.x === tile.x && gameState.enemy.y === tile.y && gameState.enemy.hp > 0) {
+              gameState.enemy.hp = Math.max(0, gameState.enemy.hp - damage);
+              hitEnemy = true;
+              break;
+            }
+          }
+
+          io.emit('abilityUsed', {
+            playerId: socket.id,
+            ability: 'groundsmash',
+            damage: damage,
+            hit: hitEnemy,
+            enemyHp: hitEnemy ? gameState.enemy.hp : null,
+            position: { x: player.x, y: player.y }
+          });
+
+          io.emit('playerManaChanged', {
+            id: socket.id,
+            mana: player.mana
+          });
+
+          if (hitEnemy && gameState.enemy.hp <= 0) {
+            io.emit('enemyDefeated');
+            setTimeout(() => {
+              gameState.enemy.hp = gameState.enemy.maxHp;
+              gameState.enemy.x = 10;
+              gameState.enemy.y = 4;
+              io.emit('enemyRespawned', gameState.enemy);
+            }, 5000);
+          }
+        }
+        break;
     }
   });
 
