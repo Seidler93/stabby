@@ -101,8 +101,11 @@ const gameState = {
     lastMove: 0,
     lastAttack: 0
   },
-  obstacles: obstacles
+  obstacles: obstacles,
+  projectiles: []
 };
+
+let projectileIdCounter = 0;
 
 const playerColors = ['#00ff00', '#0000ff', '#ffff00', '#ff00ff'];
 let colorIndex = 0;
@@ -237,7 +240,7 @@ io.on('connection', (socket) => {
   });
 
   // Handle abilities
-  socket.on('ability', (abilityType) => {
+  socket.on('ability', (data) => {
     const player = gameState.players[socket.id];
     if (!player || player.isDead) return;
 
@@ -245,46 +248,36 @@ io.on('connection', (socket) => {
     if (now - player.lastAbility < 500) return; // 0.5 second cooldown between abilities
 
     player.lastAbility = now;
+    const abilityType = data.type;
 
     switch (abilityType) {
-      case 'fireball': // Q - Ranged attack (30 mana)
+      case 'fireball': // Q - Ranged projectile attack (30 mana)
         if (player.mana >= 30) {
           player.mana -= 30;
 
-          // Check if enemy is within 3 tiles in a straight line
-          const dx = gameState.enemy.x - player.x;
-          const dy = gameState.enemy.y - player.y;
-          const inRange = (Math.abs(dx) <= 3 && dy === 0) || (dx === 0 && Math.abs(dy) <= 3);
+          // Create projectile
+          const projectile = {
+            id: projectileIdCounter++,
+            x: player.x * GRID_SIZE + GRID_SIZE / 2,
+            y: player.y * GRID_SIZE + GRID_SIZE / 2,
+            targetX: data.targetX,
+            targetY: data.targetY,
+            playerId: socket.id,
+            speed: 8, // pixels per update
+            damage: Math.floor(Math.random() * 15) + 15,
+            type: 'fireball'
+          };
 
-          if (inRange) {
-            const damage = Math.floor(Math.random() * 15) + 15; // 15-30 damage
-            gameState.enemy.hp = Math.max(0, gameState.enemy.hp - damage);
+          // Calculate direction
+          const dx = data.targetX - projectile.x;
+          const dy = data.targetY - projectile.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+          projectile.vx = (dx / distance) * projectile.speed;
+          projectile.vy = (dy / distance) * projectile.speed;
 
-            io.emit('abilityUsed', {
-              playerId: socket.id,
-              ability: 'fireball',
-              hit: true,
-              damage: damage,
-              enemyHp: gameState.enemy.hp
-            });
+          gameState.projectiles.push(projectile);
 
-            if (gameState.enemy.hp <= 0) {
-              io.emit('enemyDefeated');
-              setTimeout(() => {
-                gameState.enemy.hp = gameState.enemy.maxHp;
-                gameState.enemy.x = 10;
-                gameState.enemy.y = 4;
-                io.emit('enemyRespawned', gameState.enemy);
-              }, 5000);
-            }
-          } else {
-            io.emit('abilityUsed', {
-              playerId: socket.id,
-              ability: 'fireball',
-              hit: false
-            });
-          }
-
+          io.emit('projectileCreated', projectile);
           io.emit('playerManaChanged', {
             id: socket.id,
             mana: player.mana
@@ -372,6 +365,84 @@ io.on('connection', (socket) => {
     io.emit('playerLeft', socket.id);
   });
 });
+
+// Projectile update loop
+setInterval(() => {
+  const projectilesToRemove = [];
+
+  for (let i = 0; i < gameState.projectiles.length; i++) {
+    const proj = gameState.projectiles[i];
+
+    // Update position
+    proj.x += proj.vx;
+    proj.y += proj.vy;
+
+    const gridX = Math.floor(proj.x / GRID_SIZE);
+    const gridY = Math.floor(proj.y / GRID_SIZE);
+
+    let shouldRemove = false;
+    let hitData = null;
+
+    // Check bounds
+    if (gridX < 0 || gridX >= GAME_WIDTH || gridY < 0 || gridY >= GAME_HEIGHT) {
+      shouldRemove = true;
+    }
+
+    // Check wall collision
+    if (!shouldRemove && isObstacle(gridX, gridY)) {
+      shouldRemove = true;
+    }
+
+    // Check enemy collision
+    if (!shouldRemove && gameState.enemy.hp > 0) {
+      const enemyCenterX = gameState.enemy.x * GRID_SIZE + GRID_SIZE / 2;
+      const enemyCenterY = gameState.enemy.y * GRID_SIZE + GRID_SIZE / 2;
+      const dist = Math.sqrt(
+        Math.pow(proj.x - enemyCenterX, 2) +
+        Math.pow(proj.y - enemyCenterY, 2)
+      );
+
+      if (dist < GRID_SIZE / 2) {
+        gameState.enemy.hp = Math.max(0, gameState.enemy.hp - proj.damage);
+        shouldRemove = true;
+        hitData = {
+          type: 'enemy',
+          damage: proj.damage,
+          enemyHp: gameState.enemy.hp
+        };
+
+        if (gameState.enemy.hp <= 0) {
+          io.emit('enemyDefeated');
+          setTimeout(() => {
+            gameState.enemy.hp = gameState.enemy.maxHp;
+            gameState.enemy.x = 10;
+            gameState.enemy.y = 4;
+            io.emit('enemyRespawned', gameState.enemy);
+          }, 5000);
+        }
+      }
+    }
+
+    if (shouldRemove) {
+      projectilesToRemove.push(i);
+      io.emit('projectileDestroyed', {
+        id: proj.id,
+        hitData: hitData
+      });
+    } else {
+      io.emit('projectileUpdated', {
+        id: proj.id,
+        x: proj.x,
+        y: proj.y
+      });
+    }
+  }
+
+  // Remove destroyed projectiles (reverse order to maintain indices)
+  for (let i = projectilesToRemove.length - 1; i >= 0; i--) {
+    gameState.projectiles.splice(projectilesToRemove[i], 1);
+  }
+}, 1000 / 60); // 60 FPS for smooth projectiles
 
 // Mana regeneration loop (5 mana per second)
 setInterval(() => {

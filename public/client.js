@@ -13,9 +13,19 @@ let myPlayerId = null;
 let gameState = {
   players: {},
   enemy: null,
-  obstacles: []
+  obstacles: [],
+  projectiles: []
 };
 let isDead = false;
+let mouseX = 0;
+let mouseY = 0;
+
+// Track mouse position
+canvas.addEventListener('mousemove', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  mouseX = e.clientX - rect.left;
+  mouseY = e.clientY - rect.top;
+});
 
 // Audio Context for sound effects
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -294,6 +304,7 @@ socket.on('playerManaChanged', (data) => {
     gameState.players[data.id].mana = data.mana;
     if (data.id === myPlayerId) {
       updatePlayerInfo();
+      updateActionBar();
     }
     render();
   }
@@ -306,17 +317,6 @@ socket.on('abilityUsed', (data) => {
   const playerColor = getPlayerColor(player.color);
 
   switch (data.ability) {
-    case 'fireball':
-      playSound('attack');
-      if (data.hit) {
-        playSound('enemyHit');
-        gameState.enemy.hp = data.enemyHp;
-        updateEnemyInfo();
-        addMessage(`${playerColor} cast Fireball for ${data.damage} damage! 🔥`);
-      } else {
-        addMessage(`${playerColor}'s Fireball missed!`);
-      }
-      break;
     case 'heal':
       playSound('respawn');
       addMessage(`${playerColor} healed for ${data.healAmount} HP! ✨`);
@@ -336,6 +336,32 @@ socket.on('playerHealed', (data) => {
       updatePlayerInfo();
     }
     render();
+  }
+});
+
+socket.on('projectileCreated', (projectile) => {
+  gameState.projectiles.push(projectile);
+});
+
+socket.on('projectileUpdated', (data) => {
+  const proj = gameState.projectiles.find(p => p.id === data.id);
+  if (proj) {
+    proj.x = data.x;
+    proj.y = data.y;
+  }
+});
+
+socket.on('projectileDestroyed', (data) => {
+  const index = gameState.projectiles.findIndex(p => p.id === data.id);
+  if (index !== -1) {
+    gameState.projectiles.splice(index, 1);
+  }
+
+  if (data.hitData && data.hitData.type === 'enemy') {
+    playSound('enemyHit');
+    gameState.enemy.hp = data.hitData.enemyHp;
+    updateEnemyInfo();
+    addMessage(`Fireball hit for ${data.hitData.damage} damage! 🔥`);
   }
 });
 
@@ -365,11 +391,15 @@ function handleInput(key) {
   } else if (key === ' ' || key === 'Spacebar') {
     socket.emit('attack');
   } else if (key === 'q' || key === 'Q') {
-    socket.emit('ability', 'fireball');
+    socket.emit('ability', {
+      type: 'fireball',
+      targetX: mouseX,
+      targetY: mouseY
+    });
   } else if (key === 'e' || key === 'E') {
-    socket.emit('ability', 'heal');
+    socket.emit('ability', { type: 'heal' });
   } else if (key === 'r' || key === 'R') {
-    socket.emit('ability', 'dash');
+    socket.emit('ability', { type: 'dash' });
   }
 }
 
@@ -448,6 +478,11 @@ function render() {
     drawHealthBar(player.x, player.y, player.hp, player.maxHp);
     drawManaBar(player.x, player.y, player.mana, player.maxMana);
   }
+
+  // Draw projectiles
+  for (let proj of gameState.projectiles) {
+    drawProjectile(proj);
+  }
 }
 
 function drawPixelSprite(gridX, gridY, color, label) {
@@ -506,6 +541,37 @@ function drawManaBar(gridX, gridY, mana, maxMana) {
   const manaPercent = mana / maxMana;
   ctx.fillStyle = '#00bfff';
   ctx.fillRect(barX, barY, barWidth * manaPercent, barHeight);
+}
+
+function drawProjectile(proj) {
+  if (proj.type === 'fireball') {
+    // Draw fireball with glow effect
+    ctx.save();
+
+    // Outer glow
+    const gradient = ctx.createRadialGradient(proj.x, proj.y, 2, proj.x, proj.y, 8);
+    gradient.addColorStop(0, 'rgba(255, 150, 0, 0.8)');
+    gradient.addColorStop(0.5, 'rgba(255, 100, 0, 0.4)');
+    gradient.addColorStop(1, 'rgba(255, 50, 0, 0)');
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(proj.x, proj.y, 8, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Core
+    ctx.fillStyle = '#ff6600';
+    ctx.beginPath();
+    ctx.arc(proj.x, proj.y, 4, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Center bright spot
+    ctx.fillStyle = '#ffff00';
+    ctx.beginPath();
+    ctx.arc(proj.x, proj.y, 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
 }
 
 function updatePlayerInfo() {
@@ -608,7 +674,39 @@ window.addEventListener('load', () => {
   musicBtn.textContent = '🎵 Music ON';
   musicBtn.onclick = toggleMusic;
   document.querySelector('.container').appendChild(musicBtn);
+
+  // Update action bar with mana info
+  updateActionBar();
 });
+
+function updateActionBar() {
+  const player = gameState.players[myPlayerId];
+  if (!player) return;
+
+  // Update fireball
+  const fireballSlot = document.getElementById('ability-fireball');
+  if (player.mana < 30) {
+    fireballSlot.classList.add('insufficient-mana');
+  } else {
+    fireballSlot.classList.remove('insufficient-mana');
+  }
+
+  // Update heal
+  const healSlot = document.getElementById('ability-heal');
+  if (player.mana < 40) {
+    healSlot.classList.add('insufficient-mana');
+  } else {
+    healSlot.classList.remove('insufficient-mana');
+  }
+
+  // Update dash
+  const dashSlot = document.getElementById('ability-dash');
+  if (player.mana < 25) {
+    dashSlot.classList.add('insufficient-mana');
+  } else {
+    dashSlot.classList.remove('insufficient-mana');
+  }
+}
 
 // Game loop
 setInterval(render, 1000 / 30); // 30 FPS
