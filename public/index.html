@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pixel RPG - Multiplayer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+  <div class="container">
+    <h1>Pixel RPG - Multiplayer</h1>
+    <div class="game-info">
+      <div id="playerInfo">Waiting for connection...</div>
+      <div id="enemyInfo">Enemy HP: 100/100</div>
+      <div id="instructions">
+        Use WASD or Arrow Keys to move<br>
+        Press SPACE to attack (must be adjacent to enemy)
+      </div>
+    </div>
+    <canvas id="gameCanvas"></canvas>
+    <div id="messages"></div>
+  </div>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="client.js"></script>
+</body>
+
+</html>
