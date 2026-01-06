@@ -9,17 +9,99 @@ const GRID_SIZE = 32;
 const GAME_WIDTH = 20;
 const GAME_HEIGHT = 15;
 
+// Define obstacles/walls on the map
+const obstacles = [
+  // Center pillar
+  { x: 10, y: 7 },
+  { x: 10, y: 8 },
+  { x: 9, y: 7 },
+  { x: 11, y: 7 },
+
+  // Top left corner walls
+  { x: 3, y: 3 },
+  { x: 4, y: 3 },
+  { x: 3, y: 4 },
+
+  // Top right corner walls
+  { x: 16, y: 3 },
+  { x: 17, y: 3 },
+  { x: 17, y: 4 },
+
+  // Bottom left corner walls
+  { x: 3, y: 11 },
+  { x: 4, y: 11 },
+  { x: 3, y: 10 },
+
+  // Bottom right corner walls
+  { x: 16, y: 11 },
+  { x: 17, y: 11 },
+  { x: 17, y: 10 },
+
+  // Middle barriers
+  { x: 6, y: 7 },
+  { x: 14, y: 7 },
+];
+
+function isObstacle(x, y) {
+  return obstacles.some(obs => obs.x === x && obs.y === y);
+}
+
+// Simple A* pathfinding to avoid getting stuck on obstacles
+function findNextMove(fromX, fromY, toX, toY) {
+  // If already adjacent, don't move
+  const dx = Math.abs(toX - fromX);
+  const dy = Math.abs(toY - fromY);
+  if ((dx === 1 && dy === 0) || (dx === 0 && dy === 1)) {
+    return { x: fromX, y: fromY };
+  }
+
+  // Try all 4 directions
+  const moves = [
+    { x: fromX + 1, y: fromY, dir: 'right' },
+    { x: fromX - 1, y: fromY, dir: 'left' },
+    { x: fromX, y: fromY + 1, dir: 'down' },
+    { x: fromX, y: fromY - 1, dir: 'up' }
+  ];
+
+  // Filter out invalid moves (out of bounds or obstacles)
+  const validMoves = moves.filter(move =>
+    move.x >= 0 && move.x < GAME_WIDTH &&
+    move.y >= 0 && move.y < GAME_HEIGHT &&
+    !isObstacle(move.x, move.y)
+  );
+
+  if (validMoves.length === 0) {
+    return { x: fromX, y: fromY }; // Stuck, don't move
+  }
+
+  // Score each move by Manhattan distance to target
+  const scoredMoves = validMoves.map(move => ({
+    ...move,
+    score: Math.abs(move.x - toX) + Math.abs(move.y - toY)
+  }));
+
+  // Sort by score (lowest = closest to target)
+  scoredMoves.sort((a, b) => a.score - b.score);
+
+  // Add some randomness - sometimes pick 2nd best move to avoid predictability
+  const bestMoves = scoredMoves.filter(m => m.score === scoredMoves[0].score);
+  const chosenMove = bestMoves[Math.floor(Math.random() * bestMoves.length)];
+
+  return { x: chosenMove.x, y: chosenMove.y };
+}
+
 const gameState = {
   players: {},
   enemy: {
     x: 10,
-    y: 7,
+    y: 4,
     hp: 100,
     maxHp: 100,
     color: '#ff0000',
     lastMove: 0,
     lastAttack: 0
-  }
+  },
+  obstacles: obstacles
 };
 
 const playerColors = ['#00ff00', '#0000ff', '#ffff00', '#ff00ff'];
@@ -77,6 +159,12 @@ io.on('connection', (socket) => {
 
     // Check collision with enemy
     if (player.x === gameState.enemy.x && player.y === gameState.enemy.y) {
+      player.x = oldX;
+      player.y = oldY;
+    }
+
+    // Check collision with obstacles
+    if (isObstacle(player.x, player.y)) {
       player.x = oldX;
       player.y = oldY;
     }
@@ -174,43 +262,25 @@ setInterval(() => {
       }
     }
 
-    // Move toward nearest player (dumb pathfinding)
+    // Move toward nearest player (smarter pathfinding)
     if (nearestPlayer) {
-      const dx = nearestPlayer.x - gameState.enemy.x;
-      const dy = nearestPlayer.y - gameState.enemy.y;
+      const newPos = findNextMove(
+        gameState.enemy.x,
+        gameState.enemy.y,
+        nearestPlayer.x,
+        nearestPlayer.y
+      );
 
-      // Check if already adjacent (attack range)
-      const isAdjacent = (Math.abs(dx) === 1 && dy === 0) || (dx === 0 && Math.abs(dy) === 1);
-
-      if (!isAdjacent) {
-        // Not adjacent yet, move closer
-        // Randomly choose to move horizontally or vertically (makes it less predictable)
-        if (Math.random() > 0.5) {
-          // Try horizontal movement first
-          if (Math.abs(dx) > 1) {
-            if (dx > 0) gameState.enemy.x++;
-            else if (dx < 0) gameState.enemy.x--;
-          } else if (Math.abs(dy) > 0) {
-            if (dy > 0) gameState.enemy.y++;
-            else if (dy < 0) gameState.enemy.y--;
-          }
-        } else {
-          // Try vertical movement first
-          if (Math.abs(dy) > 1) {
-            if (dy > 0) gameState.enemy.y++;
-            else if (dy < 0) gameState.enemy.y--;
-          } else if (Math.abs(dx) > 0) {
-            if (dx > 0) gameState.enemy.x++;
-            else if (dx < 0) gameState.enemy.x--;
-          }
-        }
+      // Only emit if position actually changed
+      if (newPos.x !== gameState.enemy.x || newPos.y !== gameState.enemy.y) {
+        gameState.enemy.x = newPos.x;
+        gameState.enemy.y = newPos.y;
 
         io.emit('enemyMoved', {
           x: gameState.enemy.x,
           y: gameState.enemy.y
         });
       }
-      // If already adjacent, don't move - just stay in attack range
     }
   }
 

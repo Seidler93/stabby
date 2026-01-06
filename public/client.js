@@ -12,9 +12,165 @@ let socket = io();
 let myPlayerId = null;
 let gameState = {
   players: {},
-  enemy: null
+  enemy: null,
+  obstacles: []
 };
 let isDead = false;
+
+// Audio Context for sound effects
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+let soundEnabled = true;
+let musicEnabled = true;
+let bgMusicGain = null;
+let bgMusicInterval = null;
+
+// Background Music - 8-bit battle theme
+function startBackgroundMusic() {
+  if (!musicEnabled || bgMusicInterval) return;
+
+  bgMusicGain = audioCtx.createGain();
+  bgMusicGain.gain.value = 0.15; // Lower volume for background
+  bgMusicGain.connect(audioCtx.destination);
+
+  // Simple melody pattern (in Hz)
+  const melody = [
+    { note: 523.25, duration: 0.3 }, // C5
+    { note: 587.33, duration: 0.3 }, // D5
+    { note: 659.25, duration: 0.3 }, // E5
+    { note: 523.25, duration: 0.3 }, // C5
+    { note: 587.33, duration: 0.3 }, // D5
+    { note: 659.25, duration: 0.6 }, // E5 (longer)
+    { note: 783.99, duration: 0.3 }, // G5
+    { note: 659.25, duration: 0.3 }, // E5
+    { note: 587.33, duration: 0.3 }, // D5
+    { note: 523.25, duration: 0.6 }, // C5 (longer)
+  ];
+
+  let noteIndex = 0;
+
+  function playNextNote() {
+    if (!musicEnabled) return;
+
+    const { note, duration } = melody[noteIndex];
+    const now = audioCtx.currentTime;
+
+    const osc = audioCtx.createOscillator();
+    osc.type = 'square'; // 8-bit style
+    osc.frequency.setValueAtTime(note, now);
+
+    const noteGain = audioCtx.createGain();
+    noteGain.gain.setValueAtTime(0.3, now);
+    noteGain.gain.exponentialRampToValueAtTime(0.01, now + duration);
+
+    osc.connect(noteGain);
+    noteGain.connect(bgMusicGain);
+
+    osc.start(now);
+    osc.stop(now + duration);
+
+    noteIndex = (noteIndex + 1) % melody.length;
+  }
+
+  // Play notes in sequence
+  bgMusicInterval = setInterval(playNextNote, 300);
+  playNextNote(); // Start immediately
+}
+
+function stopBackgroundMusic() {
+  if (bgMusicInterval) {
+    clearInterval(bgMusicInterval);
+    bgMusicInterval = null;
+  }
+  if (bgMusicGain) {
+    bgMusicGain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+  }
+}
+
+// Sound effect functions
+function playSound(type) {
+  if (!soundEnabled) return;
+
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+
+  switch (type) {
+    case 'attack':
+      // Sword slash sound
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(400, now);
+      osc.frequency.exponentialRampToValueAtTime(100, now + 0.1);
+      gain.gain.setValueAtTime(0.3, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+      osc.start(now);
+      osc.stop(now + 0.1);
+      break;
+
+    case 'enemyHit':
+      // Enemy damage sound
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(200, now);
+      osc.frequency.exponentialRampToValueAtTime(50, now + 0.15);
+      gain.gain.setValueAtTime(0.4, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+      osc.start(now);
+      osc.stop(now + 0.15);
+      break;
+
+    case 'playerHit':
+      // Player taking damage
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(150, now);
+      osc.frequency.exponentialRampToValueAtTime(80, now + 0.2);
+      gain.gain.setValueAtTime(0.3, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+      osc.start(now);
+      osc.stop(now + 0.2);
+      break;
+
+    case 'death':
+      // Death sound - descending tone
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(400, now);
+      osc.frequency.exponentialRampToValueAtTime(50, now + 0.5);
+      gain.gain.setValueAtTime(0.4, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+      osc.start(now);
+      osc.stop(now + 0.5);
+      break;
+
+    case 'victory':
+      // Victory fanfare
+      const notes = [262, 330, 392, 523]; // C, E, G, C
+      notes.forEach((freq, i) => {
+        const o = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        o.connect(g);
+        g.connect(audioCtx.destination);
+        o.type = 'square';
+        o.frequency.setValueAtTime(freq, now + i * 0.15);
+        g.gain.setValueAtTime(0.2, now + i * 0.15);
+        g.gain.exponentialRampToValueAtTime(0.01, now + i * 0.15 + 0.3);
+        o.start(now + i * 0.15);
+        o.stop(now + i * 0.15 + 0.3);
+      });
+      return; // Don't execute the default stop
+
+    case 'respawn':
+      // Respawn sound - ascending tone
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(200, now);
+      osc.frequency.exponentialRampToValueAtTime(800, now + 0.3);
+      gain.gain.setValueAtTime(0.3, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+      osc.start(now);
+      osc.stop(now + 0.3);
+      break;
+  }
+}
 
 // Socket event handlers
 socket.on('init', (data) => {
@@ -22,6 +178,10 @@ socket.on('init', (data) => {
   gameState = data.gameState;
   updatePlayerInfo();
   addMessage('Connected! You are the ' + getPlayerColor(gameState.players[myPlayerId].color) + ' player');
+
+  // Start background music on first interaction
+  startBackgroundMusic();
+
   render();
 });
 
@@ -51,11 +211,18 @@ socket.on('enemyHit', (data) => {
   const playerColor = gameState.players[data.playerId] ?
     getPlayerColor(gameState.players[data.playerId].color) : 'A';
   addMessage(`${playerColor} player dealt ${data.damage} damage!`);
+
+  if (data.playerId === myPlayerId) {
+    playSound('attack');
+  }
+  playSound('enemyHit');
+
   render();
 });
 
 socket.on('enemyDefeated', () => {
   addMessage('🎉 Enemy defeated! Respawning in 5 seconds...');
+  playSound('victory');
   render();
 });
 
@@ -80,6 +247,7 @@ socket.on('playerHit', (data) => {
     if (data.id === myPlayerId) {
       updatePlayerInfo();
       addMessage(`You took ${data.damage} damage!`);
+      playSound('playerHit');
     }
     render();
   }
@@ -91,6 +259,7 @@ socket.on('playerDied', (playerId) => {
     if (playerId === myPlayerId) {
       isDead = true;
       addMessage('💀 You died! Click Respawn to continue fighting.');
+      playSound('death');
       showRespawnButton();
     } else {
       addMessage('A player has fallen!');
@@ -110,6 +279,7 @@ socket.on('playerRespawned', (data) => {
       isDead = false;
       hideRespawnButton();
       addMessage('You have respawned!');
+      playSound('respawn');
       updatePlayerInfo();
     } else {
       addMessage('A player has respawned!');
@@ -172,6 +342,30 @@ function render() {
     ctx.moveTo(0, y * GRID_SIZE);
     ctx.lineTo(canvas.width, y * GRID_SIZE);
     ctx.stroke();
+  }
+
+  // Draw obstacles/walls
+  ctx.fillStyle = '#555';
+  ctx.strokeStyle = '#777';
+  ctx.lineWidth = 2;
+  for (let obs of gameState.obstacles) {
+    const x = obs.x * GRID_SIZE;
+    const y = obs.y * GRID_SIZE;
+
+    // Draw stone texture
+    ctx.fillRect(x + 2, y + 2, GRID_SIZE - 4, GRID_SIZE - 4);
+    ctx.strokeRect(x + 2, y + 2, GRID_SIZE - 4, GRID_SIZE - 4);
+
+    // Add brick pattern
+    ctx.strokeStyle = '#666';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x + 2, y + GRID_SIZE / 2);
+    ctx.lineTo(x + GRID_SIZE - 2, y + GRID_SIZE / 2);
+    ctx.stroke();
+
+    ctx.strokeStyle = '#777';
+    ctx.lineWidth = 2;
   }
 
   // Draw enemy
@@ -298,6 +492,47 @@ function hideRespawnButton() {
     btn.style.display = 'none';
   }
 }
+
+function toggleSound() {
+  soundEnabled = !soundEnabled;
+  const btn = document.getElementById('soundToggle');
+  if (btn) {
+    btn.textContent = soundEnabled ? '🔊 SFX ON' : '🔇 SFX OFF';
+  }
+  addMessage(soundEnabled ? 'Sound effects enabled' : 'Sound effects disabled');
+}
+
+function toggleMusic() {
+  musicEnabled = !musicEnabled;
+  const btn = document.getElementById('musicToggle');
+
+  if (musicEnabled) {
+    startBackgroundMusic();
+    if (btn) btn.textContent = '🎵 Music ON';
+    addMessage('Music enabled');
+  } else {
+    stopBackgroundMusic();
+    if (btn) btn.textContent = '🎵 Music OFF';
+    addMessage('Music disabled');
+  }
+}
+
+// Add sound toggle buttons on load
+window.addEventListener('load', () => {
+  const soundBtn = document.createElement('button');
+  soundBtn.id = 'soundToggle';
+  soundBtn.className = 'sound-toggle';
+  soundBtn.textContent = '🔊 SFX ON';
+  soundBtn.onclick = toggleSound;
+  document.querySelector('.container').appendChild(soundBtn);
+
+  const musicBtn = document.createElement('button');
+  musicBtn.id = 'musicToggle';
+  musicBtn.className = 'music-toggle';
+  musicBtn.textContent = '🎵 Music ON';
+  musicBtn.onclick = toggleMusic;
+  document.querySelector('.container').appendChild(musicBtn);
+});
 
 // Game loop
 setInterval(render, 1000 / 30); // 30 FPS
