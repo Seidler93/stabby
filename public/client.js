@@ -14,7 +14,8 @@ let gameState = {
   players: {},
   enemy: null,
   obstacles: [],
-  projectiles: []
+  projectiles: [],
+  powerups: []
 };
 let isDead = false;
 let mouseX = 0;
@@ -22,6 +23,16 @@ let mouseY = 0;
 let homingCooldown = 0;
 let homingCooldownInterval = null;
 let aoeEffects = []; // Store AOE visual effects
+
+console.log('CLIENT: Script loaded, socket created');
+
+socket.on('connect', () => {
+  console.log('CLIENT: Connected to server, socket ID:', socket.id);
+});
+
+socket.on('disconnect', () => {
+  console.log('CLIENT: Disconnected from server');
+});
 
 // Track mouse position
 canvas.addEventListener('mousemove', (e) => {
@@ -40,11 +51,11 @@ let bgMusicInterval = null;
 // Background Music - 8-bit battle theme
 function startBackgroundMusic() {
   if (!musicEnabled || bgMusicInterval) return;
-
+  
   bgMusicGain = audioCtx.createGain();
   bgMusicGain.gain.value = 0.15; // Lower volume for background
   bgMusicGain.connect(audioCtx.destination);
-
+  
   // Simple melody pattern (in Hz)
   const melody = [
     { note: 523.25, duration: 0.3 }, // C5
@@ -58,32 +69,32 @@ function startBackgroundMusic() {
     { note: 587.33, duration: 0.3 }, // D5
     { note: 523.25, duration: 0.6 }, // C5 (longer)
   ];
-
+  
   let noteIndex = 0;
-
+  
   function playNextNote() {
     if (!musicEnabled) return;
-
+    
     const { note, duration } = melody[noteIndex];
     const now = audioCtx.currentTime;
-
+    
     const osc = audioCtx.createOscillator();
     osc.type = 'square'; // 8-bit style
     osc.frequency.setValueAtTime(note, now);
-
+    
     const noteGain = audioCtx.createGain();
     noteGain.gain.setValueAtTime(0.3, now);
     noteGain.gain.exponentialRampToValueAtTime(0.01, now + duration);
-
+    
     osc.connect(noteGain);
     noteGain.connect(bgMusicGain);
-
+    
     osc.start(now);
     osc.stop(now + duration);
-
+    
     noteIndex = (noteIndex + 1) % melody.length;
   }
-
+  
   // Play notes in sequence
   bgMusicInterval = setInterval(playNextNote, 300);
   playNextNote(); // Start immediately
@@ -102,15 +113,15 @@ function stopBackgroundMusic() {
 // Sound effect functions
 function playSound(type) {
   if (!soundEnabled) return;
-
+  
   const now = audioCtx.currentTime;
   const osc = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
-
+  
   osc.connect(gain);
   gain.connect(audioCtx.destination);
-
-  switch (type) {
+  
+  switch(type) {
     case 'attack':
       // Sword slash sound
       osc.type = 'sawtooth';
@@ -121,7 +132,7 @@ function playSound(type) {
       osc.start(now);
       osc.stop(now + 0.1);
       break;
-
+      
     case 'enemyHit':
       // Enemy damage sound
       osc.type = 'square';
@@ -132,7 +143,7 @@ function playSound(type) {
       osc.start(now);
       osc.stop(now + 0.15);
       break;
-
+      
     case 'playerHit':
       // Player taking damage
       osc.type = 'triangle';
@@ -143,7 +154,7 @@ function playSound(type) {
       osc.start(now);
       osc.stop(now + 0.2);
       break;
-
+      
     case 'death':
       // Death sound - descending tone
       osc.type = 'sine';
@@ -154,7 +165,7 @@ function playSound(type) {
       osc.start(now);
       osc.stop(now + 0.5);
       break;
-
+      
     case 'victory':
       // Victory fanfare
       const notes = [262, 330, 392, 523]; // C, E, G, C
@@ -171,7 +182,7 @@ function playSound(type) {
         o.stop(now + i * 0.15 + 0.3);
       });
       return; // Don't execute the default stop
-
+      
     case 'respawn':
       // Respawn sound - ascending tone
       osc.type = 'sine';
@@ -189,12 +200,18 @@ function playSound(type) {
 socket.on('init', (data) => {
   myPlayerId = data.playerId;
   gameState = data.gameState;
+  
+  // Initialize powerups array if it doesn't exist
+  if (!gameState.powerups) {
+    gameState.powerups = [];
+  }
+  
   updatePlayerInfo();
   addMessage('Connected! You are the ' + getPlayerColor(gameState.players[myPlayerId].color) + ' player');
-
+  
   // Start background music on first interaction
   startBackgroundMusic();
-
+  
   render();
 });
 
@@ -221,15 +238,15 @@ socket.on('playerMoved', (data) => {
 socket.on('enemyHit', (data) => {
   gameState.enemy.hp = data.hp;
   updateEnemyInfo();
-  const playerColor = gameState.players[data.playerId] ?
+  const playerColor = gameState.players[data.playerId] ? 
     getPlayerColor(gameState.players[data.playerId].color) : 'A';
   addMessage(`${playerColor} player dealt ${data.damage} damage!`);
-
+  
   if (data.playerId === myPlayerId) {
     playSound('attack');
   }
   playSound('enemyHit');
-
+  
   render();
 });
 
@@ -288,7 +305,7 @@ socket.on('playerRespawned', (data) => {
     gameState.players[data.id].hp = data.hp;
     gameState.players[data.id].mana = data.mana;
     gameState.players[data.id].isDead = false;
-
+    
     if (data.id === myPlayerId) {
       isDead = false;
       hideRespawnButton();
@@ -316,10 +333,10 @@ socket.on('playerManaChanged', (data) => {
 socket.on('abilityUsed', (data) => {
   const player = gameState.players[data.playerId];
   if (!player) return;
-
+  
   const playerColor = getPlayerColor(player.color);
-
-  switch (data.ability) {
+  
+  switch(data.ability) {
     case 'heal':
       playSound('respawn');
       addMessage(`${playerColor} healed for ${data.healAmount} HP! ✨`);
@@ -337,7 +354,7 @@ socket.on('abilityUsed', (data) => {
       break;
     case 'groundsmash':
       playSound('enemyHit');
-
+      
       // Add AOE visual effect
       aoeEffects.push({
         x: data.position.x,
@@ -348,7 +365,7 @@ socket.on('abilityUsed', (data) => {
         duration: 500,
         startTime: Date.now()
       });
-
+      
       if (data.hit) {
         playSound('enemyHit');
         gameState.enemy.hp = data.enemyHp;
@@ -367,6 +384,75 @@ socket.on('playerHealed', (data) => {
     gameState.players[data.id].hp = data.hp;
     if (data.id === myPlayerId) {
       updatePlayerInfo();
+    }
+    render();
+  }
+});
+
+socket.on('powerupSpawned', (powerup) => {
+  console.log('CLIENT: Powerup spawned event received:', powerup);
+  console.log('CLIENT: Current powerups array before push:', gameState.powerups);
+  
+  gameState.powerups.push(powerup);
+  
+  console.log('CLIENT: Powerups array after push:', gameState.powerups);
+  console.log('CLIENT: About to render...');
+  
+  render();
+});
+
+socket.on('powerupCollected', (data) => {
+  // Remove powerup from local state
+  const index = gameState.powerups.findIndex(p => p.id === data.powerupId);
+  if (index !== -1) {
+    gameState.powerups.splice(index, 1);
+  }
+  
+  // Show message
+  const player = gameState.players[data.playerId];
+  if (player) {
+    const playerColor = getPlayerColor(player.color);
+    let message = '';
+    switch(data.effect) {
+      case 'health':
+        message = `${playerColor} collected Health! +${data.value} HP ❤️`;
+        break;
+      case 'mana':
+        message = `${playerColor} collected Mana! +${data.value} MP 💎`;
+        break;
+      case 'invincible':
+        message = `${playerColor} is INVINCIBLE! ⭐`;
+        break;
+    }
+    addMessage(message);
+    
+    if (data.playerId === myPlayerId) {
+      playSound('respawn');
+    }
+  }
+  
+  render();
+});
+
+socket.on('powerupDespawned', (powerupId) => {
+  const index = gameState.powerups.findIndex(p => p.id === powerupId);
+  if (index !== -1) {
+    gameState.powerups.splice(index, 1);
+  }
+  render();
+});
+
+socket.on('playerStatsChanged', (data) => {
+  if (gameState.players[data.id]) {
+    if (data.hp !== undefined) gameState.players[data.id].hp = data.hp;
+    if (data.mana !== undefined) gameState.players[data.id].mana = data.mana;
+    if (data.invincible !== undefined) gameState.players[data.id].invincible = data.invincible;
+    
+    if (data.id === myPlayerId) {
+      updatePlayerInfo();
+      if (data.invincible === false) {
+        addMessage('Invincibility wore off!');
+      }
     }
     render();
   }
@@ -391,12 +477,12 @@ socket.on('projectileDestroyed', (data) => {
   if (index !== -1) {
     gameState.projectiles.splice(index, 1);
   }
-
+  
   if (data.hitData && data.hitData.type === 'enemy') {
     playSound('enemyHit');
     gameState.enemy.hp = data.hitData.enemyHp;
     updateEnemyInfo();
-
+    
     if (data.hitData.projectileType === 'homing') {
       addMessage(`💥 Homing Missile hit for ${data.hitData.damage} damage!`);
     } else {
@@ -418,14 +504,14 @@ document.addEventListener('keyup', (e) => {
 
 function handleInput(key) {
   if (!myPlayerId || isDead) return;
-
+  
   const moveKeys = {
     'w': 'up', 'W': 'up', 'ArrowUp': 'up',
     's': 'down', 'S': 'down', 'ArrowDown': 'down',
     'a': 'left', 'A': 'left', 'ArrowLeft': 'left',
     'd': 'right', 'D': 'right', 'ArrowRight': 'right'
   };
-
+  
   if (moveKeys[key]) {
     socket.emit('move', moveKeys[key]);
   } else if (key === ' ' || key === 'Spacebar') {
@@ -454,13 +540,13 @@ function render() {
   // Clear canvas
   ctx.fillStyle = '#1a1a1a';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-
+  
   // Apply death overlay if player is dead
   if (isDead) {
     ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
-
+  
   // Draw grid
   ctx.strokeStyle = isDead ? '#222' : '#333';
   ctx.lineWidth = 1;
@@ -476,7 +562,7 @@ function render() {
     ctx.lineTo(canvas.width, y * GRID_SIZE);
     ctx.stroke();
   }
-
+  
   // Draw obstacles/walls
   ctx.fillStyle = '#555';
   ctx.strokeStyle = '#777';
@@ -484,11 +570,11 @@ function render() {
   for (let obs of gameState.obstacles) {
     const x = obs.x * GRID_SIZE;
     const y = obs.y * GRID_SIZE;
-
+    
     // Draw stone texture
     ctx.fillRect(x + 2, y + 2, GRID_SIZE - 4, GRID_SIZE - 4);
     ctx.strokeRect(x + 2, y + 2, GRID_SIZE - 4, GRID_SIZE - 4);
-
+    
     // Add brick pattern
     ctx.strokeStyle = '#666';
     ctx.lineWidth = 1;
@@ -496,73 +582,109 @@ function render() {
     ctx.moveTo(x + 2, y + GRID_SIZE / 2);
     ctx.lineTo(x + GRID_SIZE - 2, y + GRID_SIZE / 2);
     ctx.stroke();
-
+    
     ctx.strokeStyle = '#777';
     ctx.lineWidth = 2;
   }
-
+  
   // Draw enemy
   if (gameState.enemy && gameState.enemy.hp > 0) {
     drawPixelSprite(
-      gameState.enemy.x,
-      gameState.enemy.y,
+      gameState.enemy.x, 
+      gameState.enemy.y, 
       gameState.enemy.color,
       'E'
     );
-
+    
     // Draw HP bar
     drawHealthBar(gameState.enemy.x, gameState.enemy.y, gameState.enemy.hp, gameState.enemy.maxHp);
   }
-
+  
   // Draw players
   for (let id in gameState.players) {
     const player = gameState.players[id];
     if (player.isDead) continue; // Don't draw dead players
-
+    
     const isMe = id === myPlayerId;
-    drawPixelSprite(player.x, player.y, player.color, isMe ? 'Y' : 'P');
+    drawPixelSprite(player.x, player.y, player.color, isMe ? 'Y' : 'P', player.invincible);
     drawHealthBar(player.x, player.y, player.hp, player.maxHp);
     drawManaBar(player.x, player.y, player.mana, player.maxMana);
   }
-
-  // Draw projectiles
-  for (let proj of gameState.projectiles) {
-    drawProjectile(proj);
+  
+  // Draw powerups
+  if (gameState.powerups && gameState.powerups.length > 0) {
+    console.log('RENDER: Drawing powerups, count:', gameState.powerups.length);
+    for (let powerup of gameState.powerups) {
+      console.log('RENDER: Drawing powerup at', powerup.x, powerup.y, powerup.icon);
+      drawPowerup(powerup);
+    }
+  } else {
+    console.log('RENDER: No powerups to draw');
   }
-
+  
+  // Draw projectiles
+  if (gameState.projectiles && gameState.projectiles.length > 0) {
+    for (let proj of gameState.projectiles) {
+      drawProjectile(proj);
+    }
+  }
+  
   // Draw AOE effects
   const now = Date.now();
-  for (let i = aoeEffects.length - 1; i >= 0; i--) {
-    const effect = aoeEffects[i];
-    const elapsed = now - effect.startTime;
-
-    if (elapsed >= effect.duration) {
-      aoeEffects.splice(i, 1);
-      continue;
+  if (aoeEffects && aoeEffects.length > 0) {
+    for (let i = aoeEffects.length - 1; i >= 0; i--) {
+      const effect = aoeEffects[i];
+      const elapsed = now - effect.startTime;
+      
+      if (elapsed >= effect.duration) {
+        aoeEffects.splice(i, 1);
+        continue;
+      }
+      
+      const progress = elapsed / effect.duration;
+      effect.radius = effect.maxRadius * progress;
+      effect.alpha = 1 - progress;
+      
+      drawAOEEffect(effect);
     }
-
-    const progress = elapsed / effect.duration;
-    effect.radius = effect.maxRadius * progress;
-    effect.alpha = 1 - progress;
-
-    drawAOEEffect(effect);
   }
 }
 
-function drawPixelSprite(gridX, gridY, color, label) {
+function drawPixelSprite(gridX, gridY, color, label, invincible = false) {
   const x = gridX * GRID_SIZE;
   const y = gridY * GRID_SIZE;
   const padding = 4;
-
+  
+  // Draw invincibility aura
+  if (invincible) {
+    ctx.save();
+    const time = Date.now() / 100;
+    const pulseSize = Math.sin(time) * 3 + 3;
+    
+    const gradient = ctx.createRadialGradient(
+      x + GRID_SIZE / 2, y + GRID_SIZE / 2, GRID_SIZE / 4,
+      x + GRID_SIZE / 2, y + GRID_SIZE / 2, GRID_SIZE / 2 + pulseSize
+    );
+    gradient.addColorStop(0, 'rgba(255, 255, 0, 0.6)');
+    gradient.addColorStop(0.5, 'rgba(255, 215, 0, 0.3)');
+    gradient.addColorStop(1, 'rgba(255, 215, 0, 0)');
+    
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(x + GRID_SIZE / 2, y + GRID_SIZE / 2, GRID_SIZE / 2 + pulseSize, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  
   // Draw body
   ctx.fillStyle = color;
   ctx.fillRect(x + padding, y + padding, GRID_SIZE - padding * 2, GRID_SIZE - padding * 2);
-
+  
   // Draw border
-  ctx.strokeStyle = '#fff';
-  ctx.lineWidth = 2;
+  ctx.strokeStyle = invincible ? '#ffff00' : '#fff';
+  ctx.lineWidth = invincible ? 3 : 2;
   ctx.strokeRect(x + padding, y + padding, GRID_SIZE - padding * 2, GRID_SIZE - padding * 2);
-
+  
   // Draw label
   ctx.fillStyle = '#fff';
   ctx.font = 'bold 14px monospace';
@@ -578,11 +700,11 @@ function drawHealthBar(gridX, gridY, hp, maxHp) {
   const barHeight = 3;
   const barX = x + 4;
   const barY = y + GRID_SIZE - 10;
-
+  
   // Background
   ctx.fillStyle = '#333';
   ctx.fillRect(barX, barY, barWidth, barHeight);
-
+  
   // Health
   const hpPercent = hp / maxHp;
   ctx.fillStyle = hpPercent > 0.5 ? '#0f0' : hpPercent > 0.25 ? '#ff0' : '#f00';
@@ -596,22 +718,63 @@ function drawManaBar(gridX, gridY, mana, maxMana) {
   const barHeight = 3;
   const barX = x + 4;
   const barY = y + GRID_SIZE - 6;
-
+  
   // Background
   ctx.fillStyle = '#333';
   ctx.fillRect(barX, barY, barWidth, barHeight);
-
+  
   // Mana
   const manaPercent = mana / maxMana;
   ctx.fillStyle = '#00bfff';
   ctx.fillRect(barX, barY, barWidth * manaPercent, barHeight);
 }
 
+function drawPowerup(powerup) {
+  console.log('drawPowerup called with:', powerup);
+  
+  const x = powerup.x * GRID_SIZE + GRID_SIZE / 2;
+  const y = powerup.y * GRID_SIZE + GRID_SIZE / 2;
+  const time = Date.now() / 200;
+  const float = Math.sin(time) * 3;
+  const rotate = time * 0.5;
+  
+  console.log('Drawing at canvas coords:', x, y);
+  
+  ctx.save();
+  ctx.translate(x, y + float);
+  ctx.rotate(rotate);
+  
+  // Glow effect
+  const gradient = ctx.createRadialGradient(0, 0, 5, 0, 0, 15);
+  gradient.addColorStop(0, powerup.color + 'aa');
+  gradient.addColorStop(0.5, powerup.color + '44');
+  gradient.addColorStop(1, powerup.color + '00');
+  ctx.fillStyle = gradient;
+  ctx.beginPath();
+  ctx.arc(0, 0, 15, 0, Math.PI * 2);
+  ctx.fill();
+  
+  // Draw icon
+  ctx.rotate(-rotate); // Keep text upright
+  ctx.font = 'bold 20px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 3;
+  ctx.strokeText(powerup.icon, 0, 0);
+  ctx.fillText(powerup.icon, 0, 0);
+  
+  console.log('Powerup drawn successfully');
+  
+  ctx.restore();
+}
+
 function drawProjectile(proj) {
   if (proj.type === 'fireball') {
     // Draw fireball with glow effect
     ctx.save();
-
+    
     // Outer glow
     const gradient = ctx.createRadialGradient(proj.x, proj.y, 2, proj.x, proj.y, 8);
     gradient.addColorStop(0, 'rgba(255, 150, 0, 0.8)');
@@ -621,27 +784,27 @@ function drawProjectile(proj) {
     ctx.beginPath();
     ctx.arc(proj.x, proj.y, 8, 0, Math.PI * 2);
     ctx.fill();
-
+    
     // Core
     ctx.fillStyle = '#ff6600';
     ctx.beginPath();
     ctx.arc(proj.x, proj.y, 4, 0, Math.PI * 2);
     ctx.fill();
-
+    
     // Center bright spot
     ctx.fillStyle = '#ffff00';
     ctx.beginPath();
     ctx.arc(proj.x, proj.y, 2, 0, Math.PI * 2);
     ctx.fill();
-
+    
     ctx.restore();
   } else if (proj.type === 'homing') {
     // Draw homing missile with trail and glow
     ctx.save();
-
+    
     // Calculate angle based on velocity
     const angle = Math.atan2(proj.vy, proj.vx);
-
+    
     // Outer glow
     const gradient = ctx.createRadialGradient(proj.x, proj.y, 2, proj.x, proj.y, 12);
     gradient.addColorStop(0, 'rgba(0, 255, 255, 0.8)');
@@ -651,15 +814,15 @@ function drawProjectile(proj) {
     ctx.beginPath();
     ctx.arc(proj.x, proj.y, 12, 0, Math.PI * 2);
     ctx.fill();
-
+    
     // Missile body
     ctx.translate(proj.x, proj.y);
     ctx.rotate(angle);
-
+    
     // Main body
     ctx.fillStyle = '#00ffff';
     ctx.fillRect(-8, -3, 16, 6);
-
+    
     // Nose cone
     ctx.fillStyle = '#ffffff';
     ctx.beginPath();
@@ -668,40 +831,40 @@ function drawProjectile(proj) {
     ctx.lineTo(12, 3);
     ctx.closePath();
     ctx.fill();
-
+    
     // Fins
     ctx.fillStyle = '#0088ff';
     ctx.fillRect(-8, -5, 4, 2);
     ctx.fillRect(-8, 3, 4, 2);
-
+    
     // Exhaust
     ctx.fillStyle = '#ffaa00';
     ctx.fillRect(-10, -2, 2, 4);
-
+    
     ctx.restore();
   }
 }
 
 function drawAOEEffect(effect) {
   ctx.save();
-
+  
   const centerX = effect.x * GRID_SIZE + GRID_SIZE / 2;
   const centerY = effect.y * GRID_SIZE + GRID_SIZE / 2;
-
+  
   // Outer ring
   ctx.strokeStyle = `rgba(255, 100, 0, ${effect.alpha * 0.8})`;
   ctx.lineWidth = 4;
   ctx.beginPath();
   ctx.arc(centerX, centerY, effect.radius, 0, Math.PI * 2);
   ctx.stroke();
-
+  
   // Inner ring
   ctx.strokeStyle = `rgba(255, 150, 0, ${effect.alpha})`;
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.arc(centerX, centerY, effect.radius * 0.7, 0, Math.PI * 2);
   ctx.stroke();
-
+  
   // Shockwave fill
   const gradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, effect.radius);
   gradient.addColorStop(0, `rgba(255, 200, 0, ${effect.alpha * 0.3})`);
@@ -711,7 +874,7 @@ function drawAOEEffect(effect) {
   ctx.beginPath();
   ctx.arc(centerX, centerY, effect.radius, 0, Math.PI * 2);
   ctx.fill();
-
+  
   // Impact cracks (8 directions)
   ctx.strokeStyle = `rgba(255, 80, 0, ${effect.alpha * 0.6})`;
   ctx.lineWidth = 3;
@@ -719,7 +882,7 @@ function drawAOEEffect(effect) {
     const angle = (Math.PI * 2 / 8) * i;
     const startDist = GRID_SIZE * 0.3;
     const endDist = effect.radius;
-
+    
     ctx.beginPath();
     ctx.moveTo(
       centerX + Math.cos(angle) * startDist,
@@ -731,21 +894,22 @@ function drawAOEEffect(effect) {
     );
     ctx.stroke();
   }
-
+  
   ctx.restore();
 }
 
 function updatePlayerInfo() {
   const player = gameState.players[myPlayerId];
   if (player) {
-    document.getElementById('playerInfo').textContent =
-      `You: ${getPlayerColor(player.color)} | HP: ${player.hp}/${player.maxHp} | Mana: ${player.mana}/${player.maxMana}`;
+    const invincibleText = player.invincible ? ' ⭐ INVINCIBLE' : '';
+    document.getElementById('playerInfo').textContent = 
+      `You: ${getPlayerColor(player.color)} | HP: ${player.hp}/${player.maxHp} | Mana: ${player.mana}/${player.maxMana}${invincibleText}`;
   }
 }
 
 function updateEnemyInfo() {
   if (gameState.enemy) {
-    document.getElementById('enemyInfo').textContent =
+    document.getElementById('enemyInfo').textContent = 
       `Enemy HP: ${gameState.enemy.hp}/${gameState.enemy.maxHp}`;
   }
 }
@@ -767,7 +931,7 @@ function addMessage(text) {
   messageEl.textContent = text;
   messagesDiv.appendChild(messageEl);
   messagesDiv.scrollTop = messagesDiv.scrollHeight;
-
+  
   // Keep only last 5 messages
   while (messagesDiv.children.length > 5) {
     messagesDiv.removeChild(messagesDiv.firstChild);
@@ -808,7 +972,7 @@ function toggleSound() {
 function toggleMusic() {
   musicEnabled = !musicEnabled;
   const btn = document.getElementById('musicToggle');
-
+  
   if (musicEnabled) {
     startBackgroundMusic();
     if (btn) btn.textContent = '🎵 Music ON';
@@ -828,14 +992,14 @@ window.addEventListener('load', () => {
   soundBtn.textContent = '🔊 SFX ON';
   soundBtn.onclick = toggleSound;
   document.querySelector('.container').appendChild(soundBtn);
-
+  
   const musicBtn = document.createElement('button');
   musicBtn.id = 'musicToggle';
   musicBtn.className = 'music-toggle';
   musicBtn.textContent = '🎵 Music ON';
   musicBtn.onclick = toggleMusic;
   document.querySelector('.container').appendChild(musicBtn);
-
+  
   // Update action bar with mana info
   updateActionBar();
 });
@@ -843,7 +1007,7 @@ window.addEventListener('load', () => {
 function updateActionBar() {
   const player = gameState.players[myPlayerId];
   if (!player) return;
-
+  
   // Update fireball
   const fireballSlot = document.getElementById('ability-fireball');
   if (player.mana < 30) {
@@ -851,7 +1015,7 @@ function updateActionBar() {
   } else {
     fireballSlot.classList.remove('insufficient-mana');
   }
-
+  
   // Update heal
   const healSlot = document.getElementById('ability-heal');
   if (player.mana < 40) {
@@ -859,7 +1023,7 @@ function updateActionBar() {
   } else {
     healSlot.classList.remove('insufficient-mana');
   }
-
+  
   // Update dash
   const dashSlot = document.getElementById('ability-dash');
   if (player.mana < 25) {
@@ -867,7 +1031,7 @@ function updateActionBar() {
   } else {
     dashSlot.classList.remove('insufficient-mana');
   }
-
+  
   // Update homing
   const homingSlot = document.getElementById('ability-homing');
   if (player.mana < 60 || homingCooldown > 0) {
@@ -875,7 +1039,7 @@ function updateActionBar() {
   } else {
     homingSlot.classList.remove('insufficient-mana');
   }
-
+  
   // Update ground smash
   const smashSlot = document.getElementById('ability-groundsmash');
   if (player.mana < 50) {
@@ -890,9 +1054,9 @@ function startHomingCooldown() {
   const overlay = document.getElementById('homing-cooldown');
   overlay.style.height = '100%';
   overlay.textContent = homingCooldown;
-
+  
   if (homingCooldownInterval) clearInterval(homingCooldownInterval);
-
+  
   homingCooldownInterval = setInterval(() => {
     homingCooldown -= 0.1;
     if (homingCooldown <= 0) {

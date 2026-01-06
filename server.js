@@ -46,6 +46,48 @@ function isObstacle(x, y) {
   return obstacles.some(obs => obs.x === x && obs.y === y);
 }
 
+function getRandomEmptyPosition() {
+  let x, y;
+  let attempts = 0;
+  do {
+    x = Math.floor(Math.random() * GAME_WIDTH);
+    y = Math.floor(Math.random() * GAME_HEIGHT);
+    attempts++;
+  } while ((isObstacle(x, y) ||
+    (gameState.enemy.x === x && gameState.enemy.y === y) ||
+    Object.values(gameState.players).some(p => p.x === x && p.y === y)) &&
+    attempts < 100);
+  return { x, y };
+}
+
+function spawnPowerup() {
+  const types = Object.keys(POWERUP_TYPES);
+  const randomType = types[Math.floor(Math.random() * types.length)];
+  const config = POWERUP_TYPES[randomType];
+  const pos = getRandomEmptyPosition();
+
+  const powerup = {
+    id: powerupIdCounter++,
+    type: randomType,
+    x: pos.x,
+    y: pos.y,
+    icon: config.icon,
+    color: config.color,
+    effect: config.effect,
+    value: config.value,
+    duration: config.duration,
+    spawnTime: Date.now()
+  };
+
+  console.log('Spawning powerup:', powerup);
+  console.log('Current powerups array:', gameState.powerups);
+
+  gameState.powerups.push(powerup);
+  io.emit('powerupSpawned', powerup);
+
+  console.log('Powerup spawned, total powerups:', gameState.powerups.length);
+}
+
 // Simple A* pathfinding to avoid getting stuck on obstacles
 function findNextMove(fromX, fromY, toX, toY) {
   // If already adjacent, don't move
@@ -102,10 +144,19 @@ const gameState = {
     lastAttack: 0
   },
   obstacles: obstacles,
-  projectiles: []
+  projectiles: [],
+  powerups: []
 };
 
 let projectileIdCounter = 0;
+let powerupIdCounter = 0;
+
+// Power-up types
+const POWERUP_TYPES = {
+  HEALTH: { icon: '❤️', color: '#ff0066', effect: 'health', value: 30 },
+  MANA: { icon: '💎', color: '#00bfff', effect: 'mana', value: 50 },
+  INVINCIBILITY: { icon: '⭐', color: '#ffdd00', effect: 'invincible', duration: 5000 }
+};
 
 const playerColors = ['#00ff00', '#0000ff', '#ffff00', '#ff00ff'];
 let colorIndex = 0;
@@ -129,13 +180,20 @@ io.on('connection', (socket) => {
     lastAttack: 0,
     lastAbility: 0,
     lastUltimate: 0,
-    isDead: false
+    isDead: false,
+    invincible: false,
+    invincibleUntil: 0
   };
 
   // Send initial game state to new player
   socket.emit('init', {
     playerId: socket.id,
     gameState: gameState
+  });
+
+  // Send all existing powerups to new player
+  gameState.powerups.forEach(powerup => {
+    socket.emit('powerupSpawned', powerup);
   });
 
   // Broadcast new player to others
@@ -174,6 +232,44 @@ io.on('connection', (socket) => {
     if (isObstacle(player.x, player.y)) {
       player.x = oldX;
       player.y = oldY;
+    }
+
+    // Check collision with powerups
+    const powerupIndex = gameState.powerups.findIndex(p => p.x === player.x && p.y === player.y);
+    if (powerupIndex !== -1) {
+      const powerup = gameState.powerups[powerupIndex];
+
+      // Apply powerup effect
+      switch (powerup.effect) {
+        case 'health':
+          player.hp = Math.min(player.maxHp, player.hp + powerup.value);
+          break;
+        case 'mana':
+          player.mana = Math.min(player.maxMana, player.mana + powerup.value);
+          break;
+        case 'invincible':
+          player.invincible = true;
+          player.invincibleUntil = Date.now() + powerup.duration;
+          break;
+      }
+
+      // Remove powerup
+      gameState.powerups.splice(powerupIndex, 1);
+
+      io.emit('powerupCollected', {
+        powerupId: powerup.id,
+        playerId: socket.id,
+        effect: powerup.effect,
+        value: powerup.value,
+        duration: powerup.duration
+      });
+
+      io.emit('playerStatsChanged', {
+        id: socket.id,
+        hp: player.hp,
+        mana: player.mana,
+        invincible: player.invincible
+      });
     }
 
     io.emit('playerMoved', {
@@ -463,6 +559,40 @@ io.on('connection', (socket) => {
   });
 });
 
+// Power-up spawning loop (spawn every 10-15 seconds)
+setInterval(() => {
+  // Max 5 powerups on map at once
+  if (gameState.powerups.length < 5) {
+    spawnPowerup();
+  }
+
+  // Remove old powerups (despawn after 30 seconds)
+  const now = Date.now();
+  for (let i = gameState.powerups.length - 1; i >= 0; i--) {
+    if (now - gameState.powerups[i].spawnTime > 30000) {
+      const removed = gameState.powerups.splice(i, 1)[0];
+      io.emit('powerupDespawned', removed.id);
+    }
+  }
+}, 12000); // Every 12 seconds
+
+// Check invincibility expiration
+setInterval(() => {
+  const now = Date.now();
+  for (let id in gameState.players) {
+    const player = gameState.players[id];
+    if (player.invincible && now >= player.invincibleUntil) {
+      player.invincible = false;
+      io.emit('playerStatsChanged', {
+        id: id,
+        hp: player.hp,
+        mana: player.mana,
+        invincible: false
+      });
+    }
+  }
+}, 100);
+
 // Projectile update loop
 setInterval(() => {
   const projectilesToRemove = [];
@@ -644,7 +774,7 @@ setInterval(() => {
     // Attack all adjacent players
     for (let id in gameState.players) {
       const player = gameState.players[id];
-      if (player.isDead) continue;
+      if (player.isDead || player.invincible) continue; // Skip invincible players
 
       const dx = Math.abs(player.x - gameState.enemy.x);
       const dy = Math.abs(player.y - gameState.enemy.y);
